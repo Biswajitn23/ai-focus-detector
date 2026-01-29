@@ -1,4 +1,4 @@
-streamlit
-opencv-python
+gradio
 mediapipe
+opencv-python
 numpy
