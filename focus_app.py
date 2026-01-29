@@ -6,7 +6,6 @@ import os
 import urllib.request
 import mediapipe as mp
 from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions
-from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
 from mediapipe.tasks.python.vision.face_landmarker import _BaseOptions
 from collections import deque
 import time
@@ -93,7 +92,6 @@ run = st.checkbox("Run Detector", value=True)
 EAR_HISTORY = deque(maxlen=20)
 IRIS_HISTORY = deque(maxlen=20)
 POSE_HISTORY = deque(maxlen=20)
-FACE_CONF_HISTORY = deque(maxlen=10)
 
 CALIBRATION_MODE = False
 CALIBRATION_FRAMES = 100
@@ -120,12 +118,18 @@ while run:
         st.warning("No webcam frame.")
         break
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # Robust import for Image and ImageFormat (prefer official path)
+    try:
+        from mediapipe.tasks.python.vision import Image, ImageFormat
+    except ImportError:
+        try:
+            from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
+        except ImportError:
+            st.error("❌ Could not import Image from mediapipe.tasks.python.vision. Please ensure you have mediapipe >= 0.10.0 and reinstall if needed.")
+            st.stop()
     mp_image = Image(image_format=ImageFormat.SRGB, data=rgb_frame)
     result = face_landmarker.detect(mp_image)
     h, w, _ = frame.shape
-    # Face detection confidence (if available)
-    face_conf = getattr(result, 'face_detection_confidence', 1.0)
-    FACE_CONF_HISTORY.append(face_conf)
     # Ambient light check (simple mean pixel value)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     brightness = np.mean(gray)
@@ -163,11 +167,7 @@ while run:
         ear_smooth = np.mean(EAR_HISTORY)
         iris_smooth = np.mean(IRIS_HISTORY)
         pose_smooth = np.mean(POSE_HISTORY, axis=0)
-        face_conf_smooth = np.mean(FACE_CONF_HISTORY)
-        # Only process if face detection confidence is high
-        if face_conf_smooth < 0.7:
-            cv2.putText(frame, "Low face detection confidence", (30, 270),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+        # (face_confidence not available in FaceLandmarker API)
         # Eye state
         if both_eyes_closed:
             eye_state = "Closed"
