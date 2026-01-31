@@ -1,13 +1,11 @@
 # AI Focus Detector
-
+![Demo animation](assets/animation.svg)
 **This repository contains three entrypoints for a webcam-based focus / drowsiness detector that uses MediaPipe landmarks.**
 
 ## Files
 - **`app.py`** — Gradio web app (live webcam demo). Prefers MediaPipe Tasks `FaceLandmarker`; falls back to `mediapipe.solutions.face_mesh` if needed.
 - **`focus_app.py`** — Streamlit web app with manual calibration and status display.
 - **`focus_detector.py`** — CLI/OpenCV app: fullscreen webcam window with keyboard controls (`c` = calibrate, `q` = quit).
-
-![Demo animation](assets/animation.svg)
 
 ## Key features (present across all three apps)
 - **EAR + IAR**: Eye Aspect Ratio and Iris Aspect Ratio per-frame detection.
