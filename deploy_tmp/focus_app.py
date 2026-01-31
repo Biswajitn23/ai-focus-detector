@@ -5,8 +5,29 @@ import tempfile
 import os
 import urllib.request
 import mediapipe as mp
-from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions
-from mediapipe.tasks.python.vision.face_landmarker import _BaseOptions
+# Prefer MediaPipe Tasks FaceLandmarker; fall back to Solutions FaceMesh
+USE_TASKS = False
+FaceLandmarker = None
+FaceLandmarkerOptions = None
+_BaseOptions = None
+Image = None
+ImageFormat = None
+try:
+    from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions
+    from mediapipe.tasks.python.vision.face_landmarker import _BaseOptions
+    try:
+        from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
+    except Exception:
+        from mediapipe.tasks.python.vision import Image, ImageFormat
+    USE_TASKS = True
+except Exception:
+    try:
+        from mediapipe import solutions as mps
+        mps_face_mesh = mps.face_mesh
+        USE_TASKS = False
+    except Exception:
+        st.error("Neither MediaPipe Tasks nor Solutions FaceMesh could be imported. Please install mediapipe.")
+        st.stop()
 from collections import deque
 import time
 
@@ -74,13 +95,16 @@ def head_pose(landmarks, w, h):
 st.title("Advanced Focus Level Detector")
 st.write("Press 'Calibrate' to personalize thresholds. Webcam required.")
 
-options = FaceLandmarkerOptions(
-    base_options=_BaseOptions(model_asset_path=MODEL_PATH),
-    output_face_blendshapes=False,
-    output_facial_transformation_matrixes=False,
-    num_faces=1,
-)
-face_landmarker = FaceLandmarker.create_from_options(options)
+if USE_TASKS:
+    options = FaceLandmarkerOptions(
+        base_options=_BaseOptions(model_asset_path=MODEL_PATH),
+        output_face_blendshapes=False,
+        output_facial_transformation_matrixes=False,
+        num_faces=1,
+    )
+    face_landmarker = FaceLandmarker.create_from_options(options)
+else:
+    face_mesh = mps_face_mesh.FaceMesh(static_image_mode=False, refine_landmarks=True, max_num_faces=1)
 
 # Streamlit webcam input
 frame_window = st.image([])
@@ -118,17 +142,17 @@ while run:
         st.warning("No webcam frame.")
         break
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    # Robust import for Image and ImageFormat (prefer official path)
-    try:
-        from mediapipe.tasks.python.vision import Image, ImageFormat
-    except ImportError:
-        try:
-            from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
-        except ImportError:
-            st.error("❌ Could not import Image from mediapipe.tasks.python.vision. Please ensure you have mediapipe >= 0.10.0 and reinstall if needed.")
-            st.stop()
-    mp_image = Image(image_format=ImageFormat.SRGB, data=rgb_frame)
-    result = face_landmarker.detect(mp_image)
+    # Detect with Tasks API if available, otherwise use Solutions FaceMesh
+    landmarks = None
+    if USE_TASKS:
+        mp_image = Image(image_format=ImageFormat.SRGB, data=rgb_frame)
+        result = face_landmarker.detect(mp_image)
+        if result.face_landmarks:
+            landmarks = result.face_landmarks[0]
+    else:
+        results = face_mesh.process(rgb_frame)
+        if results and results.multi_face_landmarks:
+            landmarks = results.multi_face_landmarks[0].landmark
     h, w, _ = frame.shape
     # Ambient light check (simple mean pixel value)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -136,8 +160,7 @@ while run:
     if brightness < 40:
         cv2.putText(frame, "Low light: accuracy reduced", (30, 230),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-    if result.face_landmarks:
-        landmarks = result.face_landmarks[0]
+    if landmarks is not None:
         left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
         right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
         left_iris_ar = iris_aspect_ratio(landmarks, LEFT_IRIS)
