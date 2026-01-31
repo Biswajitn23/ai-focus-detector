@@ -4,17 +4,38 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions
 from mediapipe.tasks.python.vision.face_landmarker import _BaseOptions
-# Robust import for Image and ImageFormat
-try:
-    from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
-except ImportError:
-    from mediapipe.tasks.python.vision import Image, ImageFormat
+# Robust import for Image and ImageFormat with helpful error if not available
+def _import_mediapipe_image():
+    try:
+        from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
+        return Image, ImageFormat
+    except Exception:
+        try:
+            from mediapipe.tasks.python.vision import Image, ImageFormat
+            return Image, ImageFormat
+        except Exception as e:
+            try:
+                from importlib.metadata import version
+                mp_version = version("mediapipe")
+            except Exception:
+                try:
+                    import pkg_resources
+                    mp_version = pkg_resources.get_distribution("mediapipe").version
+                except Exception:
+                    mp_version = "unknown"
+            raise ImportError(
+                f"Could not import Image/ImageFormat from MediaPipe tasks API. Installed mediapipe version: {mp_version}. "
+                "This app requires MediaPipe Tasks (mediapipe>=0.10).\n"
+                "Please install a compatible mediapipe, e.g. `pip install 'mediapipe>=0.10.0'`"
+            ) from e
+
+Image, ImageFormat = _import_mediapipe_image()
 import os
 
 MODEL_PATH = "face_landmarker_v2.task"
 MODEL_URL = "https://storage.googleapis.com/mediapipe-assets/face_landmarker_v2.task"
 
-# Download model if not present
+# Download model if not
 def download_model():
     if not os.path.exists(MODEL_PATH):
         import urllib.request
