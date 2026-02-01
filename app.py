@@ -5,6 +5,8 @@ import mediapipe as mp
 from collections import deque
 import time
 import csv
+import os
+import joblib
 
 # Try to use MediaPipe Tasks API (FaceLandmarker). If unavailable, fall back to
 # MediaPipe Solutions FaceMesh which is more widely available in wheels.
@@ -33,6 +35,17 @@ except Exception:
     except Exception:
         raise ImportError("Neither MediaPipe Tasks nor Solutions FaceMesh could be imported. Please install mediapipe.")
 import os
+import joblib
+
+# Load trained model if available
+MODEL_FILE = "focus_model.pkl"
+trained_clf = None
+if os.path.exists(MODEL_FILE):
+    try:
+        trained_clf = joblib.load(MODEL_FILE)
+        print(f"Loaded trained model from {MODEL_FILE}")
+    except Exception as e:
+        print(f"Failed to load model: {e}")
 
 MODEL_PATH = "face_landmarker_v2.task"
 MODEL_URL = "https://storage.googleapis.com/mediapipe-assets/face_landmarker_v2.task"
@@ -77,6 +90,8 @@ calib_ear = []
 calib_iris = []
 ear_thresh = 0.20
 iris_thresh = 0.25
+STATIC_EAR_SLEEPY = 0.18
+STATIC_IRIS_SLEEPY = 0.22
 
 CONSEC_FRAMES_REQUIRED = 5
 closed_count = 0
@@ -137,7 +152,7 @@ def head_pose(landmarks, w, h):
     z = np.arctan2(rmat[1, 0], rmat[0, 0])
     return np.degrees(x), np.degrees(y), np.degrees(z)
 
-def detect_focus(frame):
+def detect_focus(frame, detailed=False, return_metrics=False, use_trained=True):
     # Normalize input from Gradio: accept None, file path, PIL image, or numpy array.
     from PIL import Image as PILImage
 
@@ -206,6 +221,7 @@ def detect_focus(frame):
                 calib_iris.clear()
 
         # Determine eye state with debounce
+        history_len = len(EAR_HISTORY)
         both_eyes_closed = (ear_smooth < ear_thresh and iris_smooth < iris_thresh)
         # head pose gating
         turned_away = abs(pose_smooth[1]) > 30
@@ -216,17 +232,72 @@ def detect_focus(frame):
             open_count += 1
             closed_count = 0
 
-        is_sleepy = closed_count >= CONSEC_FRAMES_REQUIRED
-        # Compose status
-        if is_sleepy:
-            status = "Not Focused (Sleepy)"
-            confidence = 0.5
-        elif turned_away:
-            status = "Not Focused (Turned Away)"
-            confidence = 0.6
+        # For single/very few frames (e.g., uploaded images), use fixed one-shot thresholds
+        if history_len <= 2:
+            is_sleepy = (ear_smooth < STATIC_EAR_SLEEPY and iris_smooth < STATIC_IRIS_SLEEPY)
         else:
-            status = "Focused"
-            confidence = 1.0
+            is_sleepy = closed_count >= CONSEC_FRAMES_REQUIRED
+        
+        # Compute gaze direction (iris offset within eye bounds)
+        left_iris_x = np.mean([landmarks[i].x for i in LEFT_IRIS])
+        right_iris_x = np.mean([landmarks[i].x for i in RIGHT_IRIS])
+        left_eye_x_center = np.mean([landmarks[i].x for i in LEFT_EYE])
+        right_eye_x_center = np.mean([landmarks[i].x for i in RIGHT_EYE])
+        left_eye_w = max([landmarks[i].x for i in LEFT_EYE]) - min([landmarks[i].x for i in LEFT_EYE])
+        right_eye_w = max([landmarks[i].x for i in RIGHT_EYE]) - min([landmarks[i].x for i in RIGHT_EYE])
+        if left_eye_w < 1e-6: left_eye_w = 1e-6
+        if right_eye_w < 1e-6: right_eye_w = 1e-6
+        left_offset = (left_iris_x - left_eye_x_center) / left_eye_w
+        right_offset = (right_iris_x - right_eye_x_center) / right_eye_w
+        gaze_x = (left_offset + right_offset) / 2.0
+        
+        # Use trained model if available
+        if use_trained and trained_clf is not None:
+            try:
+                features = np.array([ear_smooth, iris_smooth, pose_smooth[0], pose_smooth[1], pose_smooth[2], gaze_x])
+                pred = trained_clf.predict([features])[0]
+                pred_proba = trained_clf.predict_proba([features])[0]
+                if pred == 1:
+                    status = "Focused"
+                    confidence = float(pred_proba[1])
+                else:
+                    status = "Not Focused"
+                    confidence = float(pred_proba[0])
+            except Exception as e:
+                print(f"Model prediction error: {e}")
+                # Fallback to heuristic if model fails
+                if is_sleepy:
+                    status = "Not Focused (Sleepy)"
+                    confidence = 0.5
+                elif turned_away:
+                    status = "Not Focused (Turned Away)"
+                    confidence = 0.6
+                else:
+                    status = "Focused"
+                    confidence = 1.0
+        else:
+            # Fallback to heuristic
+            if is_sleepy:
+                status = "Not Focused (Sleepy)"
+                confidence = 0.5
+            elif turned_away:
+                status = "Not Focused (Turned Away)"
+                confidence = 0.6
+            else:
+                status = "Focused"
+                confidence = 1.0
+
+        metrics = dict(
+            ear=float(ear_smooth),
+            iris=float(iris_smooth),
+            yaw=float(pose_smooth[0]),
+            pitch=float(pose_smooth[1]),
+            roll=float(pose_smooth[2]),
+            ear_thresh=float(ear_thresh),
+            iris_thresh=float(iris_thresh),
+            status=status,
+            confidence=confidence,
+        )
 
         # logging
         try:
@@ -235,37 +306,99 @@ def detect_focus(frame):
                 writer.writerow([time.time(), ear_smooth, iris_smooth, pose_smooth[0], pose_smooth[1], pose_smooth[2], status, confidence])
         except Exception:
             pass
-        # Draw status
-        if ear < 0.20 and iris_ar < 0.25:
-            status = "Sleepy/Not Focused"
-            color = (0, 0, 255)
-        else:
-            status = "Focused"
+        # Draw status with appropriate color
+        if status.startswith("Focused"):
             color = (0, 255, 0)
+        else:
+            color = (0, 0, 255)
         bgr = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
-        cv2.putText(bgr, f"Status: {status}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+        ih, iw = bgr.shape[:2]
+        font_scale = max(0.6, min(3.0, ih / 480.0))
+        thickness = max(1, int(round(ih / 240.0)))
+        cv2.putText(bgr, f"Status: {status}", (30, int(30 * (ih / 480.0))), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
+        if return_metrics:
+            return bgr, metrics
         return bgr
     else:
         bgr = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
-        cv2.putText(bgr, "No face detected", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+        ih, iw = bgr.shape[:2]
+        font_scale = max(0.6, min(3.0, ih / 480.0))
+        thickness = max(1, int(round(ih / 240.0)))
+        cv2.putText(bgr, "No face detected", (30, int(30 * (ih / 480.0))), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0,0,255), thickness)
+        if return_metrics:
+            return bgr, dict(status="no_face")
         return bgr
 
-# Create a Gradio Image input component compatible with multiple gradio versions
+use_blocks = False
 try:
-    img_input = gr.Image(source="webcam", tool=None)
-except TypeError:
-    try:
-        img_input = gr.inputs.Image(source="webcam")
-    except Exception:
-        img_input = gr.Image()
+    _ = gr.Blocks
+except Exception:
+    use_blocks = False
 
-demo = gr.Interface(
-    fn=detect_focus,
-    inputs=img_input,
-    outputs=gr.Image(),
-    live=True,
-    title="Focus Detector (Webcam)",
-    description="Detects if you are focused or sleepy using your webcam."
-)
+if use_blocks:
+    with gr.Blocks(title="Focus Detector") as demo:
+        gr.Markdown("# 👁️ Focus Detector")
+        gr.Markdown("Detects if you are **FOCUSED** (looking at screen) or **NOT FOCUSED** (looking away/distracted)")
+        
+        with gr.Tabs():
+            # WEBCAM TAB
+            with gr.TabItem("📹 Live Webcam"):
+                gr.Markdown("### Real-time Detection")
+                gr.Markdown("The webcam feed shows **live analysis** - your status updates continuously")
+                
+                with gr.Row():
+                    with gr.Column():
+                        cam = gr.Image(sources=["webcam"], tool=None, label="📷 Your Webcam", type="numpy")
+                    with gr.Column():
+                        out_cam = gr.Image(label="✅ Detection Output")
+                
+                cam.change(fn=detect_focus, inputs=cam, outputs=out_cam)
+            
+            # UPLOAD TAB
+            with gr.TabItem("📤 Upload Image"):
+                gr.Markdown("### Test with Saved Images")
+                gr.Markdown("Upload a photo to analyze. The system will detect if the person in the image is **focused** (looking at camera) or **not focused** (looking away)")
+                
+                with gr.Row():
+                    with gr.Column():
+                        upload = gr.Image(type="numpy", label="📸 Upload Image")
+                    with gr.Column():
+                        out_up = gr.Image(label="✅ Detection Output")
+                
+                with gr.Row():
+                    out_metrics = gr.Textbox(label="📊 Analysis Metrics", lines=12)
 
-demo.launch(share=True, server_name="0.0.0.0")
+                def _process_upload(img):
+                    res = detect_focus(img, return_metrics=True)
+                    if isinstance(res, tuple):
+                        img_out, metrics = res
+                        import json
+                        return img_out, json.dumps(metrics, indent=2)
+                    return res, "{}"
+
+                upload.change(fn=_process_upload, inputs=upload, outputs=[out_up, out_metrics])
+
+
+    demo.launch(share=False, server_name="127.0.0.1", server_port=7861)
+else:
+    img_input = gr.Image(type="numpy")
+    outputs = [gr.Image(), gr.Textbox(lines=10, label="Metrics")]
+
+    def _iface_process(img):
+        res = detect_focus(img, return_metrics=True)
+        if isinstance(res, tuple):
+            img_out, metrics = res
+            import json
+            return img_out, json.dumps(metrics, indent=2)
+        return res, "{}"
+
+    demo = gr.Interface(
+        fn=_iface_process,
+        inputs=img_input,
+        outputs=outputs,
+        live=False,
+        title="Focus Detector",
+        description="Upload an image to detect focus or sleepy state."
+    )
+
+    demo.launch(share=False, server_name="127.0.0.1", server_port=7861)
