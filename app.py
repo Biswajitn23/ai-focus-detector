@@ -379,7 +379,11 @@ if use_blocks:
                 upload.change(fn=_process_upload, inputs=upload, outputs=[out_up, out_metrics])
 
 
-    demo.launch(share=False, server_name="127.0.0.1", server_port=7861)
+    # Support both local and HF Spaces environments
+    import os
+    server_name = os.getenv("GRADIO_SERVER_NAME", "0.0.0.0")
+    server_port = int(os.getenv("GRADIO_SERVER_PORT", 7860))
+    demo.launch(share=False, server_name=server_name, server_port=server_port)
 else:
     img_input = gr.Image(type="numpy")
     outputs = [gr.Image(), gr.Textbox(lines=10, label="Metrics")]
@@ -401,4 +405,8 @@ else:
         description="Upload an image to detect focus or sleepy state."
     )
 
-    demo.launch(share=False, server_name="127.0.0.1", server_port=7861)
+    # Support both local and HF Spaces environments
+    import os
+    server_name = os.getenv("GRADIO_SERVER_NAME", "0.0.0.0")
+    server_port = int(os.getenv("GRADIO_SERVER_PORT", 7860))
+    demo.launch(share=False, server_name=server_name, server_port=server_port)
