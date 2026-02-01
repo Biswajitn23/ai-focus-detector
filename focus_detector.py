@@ -319,22 +319,13 @@ while True:
         else:
             focus_status = "Focused"
 
-        # Prepare display text and then render on flipped image so text is not mirrored
+        # Prepare a minimal display: render on flipped image so text is not mirrored
         disp = cv2.flip(frame, 1)
-        cv2.putText(disp, f"EAR: {ear_smooth:.2f}", (30, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-        cv2.putText(disp, f"IAR: {iris_smooth:.2f}", (30, 70),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,128,255), 2)
-        cv2.putText(disp, f"Pose Yaw: {pose_smooth[1]:.1f}", (30, 110),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,0), 2)
-        cv2.putText(disp, f"Status: {focus_status}", (30, 150),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
-        cv2.putText(disp, f"Confidence: {confidence:.2f}", (30, 190),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
-        # Debug overlay: raw yaw, gaze_x, ear, iris, normalized face width and yaw-away threshold
-        adj_yaw_display = (pose_smooth[1] - (neutral_yaw if neutral_yaw is not None else 0.0))
-        cv2.putText(disp, f"Yaw:{pose_smooth[1]:.1f} Adj:{adj_yaw_display:.1f} GazeX:{gaze_x:.2f} EAR:{ear_smooth:.2f} IAR:{iris_smooth:.2f} faceW:{face_w_norm:.2f}", (30,230),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,50), 2)
+        # Show only the essential status and confidence to keep the view uncluttered
+        cv2.putText(disp, f"Status: {focus_status}", (30, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,255,255), 2)
+        cv2.putText(disp, f"Confidence: {confidence:.2f}", (30, 90),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,255,255), 2)
         if args.verbose:
             print(f"ts={ts:.3f} raw_yaw={pose_smooth[1]:.2f} gaze_x={gaze_x:.3f} ear={ear_smooth:.3f} iar={iris_smooth:.3f} faceW={face_w_norm:.3f} status={focus_status} conf={confidence:.2f}")
         log_status(ts, ear_smooth, iris_smooth, pose_smooth, focus_status, confidence)

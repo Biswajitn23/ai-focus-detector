@@ -95,6 +95,16 @@ def head_pose(landmarks, w, h):
 st.title("Advanced Focus Level Detector")
 st.write("Press 'Calibrate' to personalize thresholds. Webcam required.")
 
+# Gaze threshold control and neutral storage
+if 'gaze_thresh' not in st.session_state:
+    st.session_state['gaze_thresh'] = 0.22
+if 'gaze_neutral' not in st.session_state:
+    st.session_state['gaze_neutral'] = 0.0
+st.sidebar.markdown("**Settings**")
+st.sidebar.write("Adjust gaze sensitivity if needed")
+st.sidebar_slider = st.sidebar.slider("Gaze threshold", 0.05, 0.6, st.session_state['gaze_thresh'], 0.01)
+st.session_state['gaze_thresh'] = st.sidebar_slider
+
 if USE_TASKS:
     options = FaceLandmarkerOptions(
         base_options=_BaseOptions(model_asset_path=MODEL_PATH),
@@ -121,6 +131,7 @@ CALIBRATION_MODE = False
 CALIBRATION_FRAMES = 100
 calib_ear = []
 calib_iris = []
+calib_gaze = []
 ear_thresh = 0.20
 iris_thresh = 0.25
 
@@ -167,6 +178,18 @@ while run:
         right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
         left_iris_ar = iris_aspect_ratio(landmarks, LEFT_IRIS)
         right_iris_ar = iris_aspect_ratio(landmarks, RIGHT_IRIS)
+        # Gaze estimation: compute normalized iris center offset within each eye
+        left_iris_x = np.mean([landmarks[i].x for i in LEFT_IRIS])
+        right_iris_x = np.mean([landmarks[i].x for i in RIGHT_IRIS])
+        left_eye_x_center = np.mean([landmarks[i].x for i in LEFT_EYE])
+        right_eye_x_center = np.mean([landmarks[i].x for i in RIGHT_EYE])
+        left_eye_w = max([landmarks[i].x for i in LEFT_EYE]) - min([landmarks[i].x for i in LEFT_EYE])
+        right_eye_w = max([landmarks[i].x for i in RIGHT_EYE]) - min([landmarks[i].x for i in RIGHT_EYE])
+        if left_eye_w < 1e-6: left_eye_w = 1e-6
+        if right_eye_w < 1e-6: right_eye_w = 1e-6
+        left_offset = (left_iris_x - left_eye_x_center) / left_eye_w
+        right_offset = (right_iris_x - right_eye_x_center) / right_eye_w
+        gaze_x = (left_offset + right_offset) / 2.0
         # Require both eyes closed for "sleepy"
         both_eyes_closed = (left_ear < st.session_state['ear_thresh'] and left_iris_ar < st.session_state['iris_thresh'] and
                             right_ear < st.session_state['ear_thresh'] and right_iris_ar < st.session_state['iris_thresh'])
@@ -179,13 +202,17 @@ while run:
         if CALIBRATION_MODE:
             calib_ear.append(ear)
             calib_iris.append(iris_ar)
+            calib_gaze.append(gaze_x)
             st.info(f"Calibrating... {len(calib_ear)}/{CALIBRATION_FRAMES}")
             if len(calib_ear) >= CALIBRATION_FRAMES:
                 st.session_state['ear_thresh'] = np.mean(calib_ear) * 0.8
                 st.session_state['iris_thresh'] = np.mean(calib_iris) * 0.8
+                # compute neutral gaze offset (median)
+                st.session_state['gaze_neutral'] = float(np.median(calib_gaze)) if len(calib_gaze) > 0 else 0.0
                 CALIBRATION_MODE = False
                 calib_ear.clear()
                 calib_iris.clear()
+                calib_gaze.clear()
                 st.success(f"Calibrated: EAR < {st.session_state['ear_thresh']:.2f}, IRIS < {st.session_state['iris_thresh']:.2f}")
             display_frame = cv2.flip(frame, 1)
             cv2.putText(display_frame, f"Calibrating... {len(calib_ear)}/{CALIBRATION_FRAMES}", (30, 30),
@@ -201,13 +228,23 @@ while run:
             eye_state = "Closed"
         else:
             eye_state = "Open"
-        # Head direction (ignore if face turned too far)
-        if abs(pose_smooth[1]) > 30:
-            direction = "Face turned away"
-        elif abs(pose_smooth[1]) > 20:
-            direction = "Looking Left" if pose_smooth[1] > 0 else "Looking Right"
+        # Determine direction primarily by gaze; fallback to head pose
+        direction = "Looking Center"
+        gaze_adj = gaze_x - st.session_state.get('gaze_neutral', 0.0)
+        if not np.isnan(gaze_adj):
+            if gaze_adj > st.session_state.get('gaze_thresh', 0.22):
+                direction = "Looking Right"
+            elif gaze_adj < -st.session_state.get('gaze_thresh', 0.22):
+                direction = "Looking Left"
+            else:
+                direction = "Looking Center"
         else:
-            direction = "Looking Center"
+            if abs(pose_smooth[1]) > 30:
+                direction = "Face turned away"
+            elif abs(pose_smooth[1]) > 20:
+                direction = "Looking Left" if pose_smooth[1] > 0 else "Looking Right"
+            else:
+                direction = "Looking Center"
         # Focus logic with confidence
         confidence = 1.0
         if eye_state == "Closed":
@@ -221,21 +258,15 @@ while run:
             confidence -= 0.3
         else:
             focus_status = "Focused"
-        # Draw readable overlays on mirrored frame
+        # Minimal overlays on mirrored frame: keep the view uncluttered
         display_frame = cv2.flip(frame, 1)
         if low_light:
-            cv2.putText(display_frame, "Low light: accuracy reduced", (30, 230),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-        cv2.putText(display_frame, f"EAR: {ear_smooth:.2f}", (30, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-        cv2.putText(display_frame, f"IAR: {iris_smooth:.2f}", (30, 70),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,128,255), 2)
-        cv2.putText(display_frame, f"Pose Yaw: {pose_smooth[1]:.1f}", (30, 110),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,0), 2)
-        cv2.putText(display_frame, f"Status: {focus_status}", (30, 150),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
-        cv2.putText(display_frame, f"Confidence: {confidence:.2f}", (30, 190),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+            cv2.putText(display_frame, "Low light: accuracy reduced", (30, 220),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+        cv2.putText(display_frame, f"Status: {focus_status}", (30, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,255,255), 2)
+        cv2.putText(display_frame, f"Confidence: {confidence:.2f}", (30, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,255,255), 2)
     else:
         display_frame = cv2.flip(frame, 1)
         cv2.putText(display_frame, "No face detected", (30, 30),
