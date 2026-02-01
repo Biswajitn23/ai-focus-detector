@@ -143,6 +143,7 @@ parser.add_argument("--yaw-distract", type=float, default=YAW_DISTRACT, help="Ya
 parser.add_argument("--calib-frames", type=int, default=120, help="Calibration frames")
 parser.add_argument("--test-seconds", type=int, default=0, help="Run for this many seconds then exit (0 = run until quit)")
 parser.add_argument("--verbose", action="store_true", help="Verbose console logging each frame")
+parser.add_argument("--gaze-thresh", type=float, default=0.22, help="Normalized iris offset threshold for centered gaze")
 args = parser.parse_args()
 
 # apply args
@@ -150,6 +151,7 @@ MIN_FACE_SCALE = args.min_face_scale
 YAW_FACE_AWAY = args.yaw_away
 YAW_DISTRACT = args.yaw_distract
 CALIBRATION_FRAMES = args.calib_frames
+GAZE_THRESH = args.gaze_thresh
 
 EAR_HISTORY = deque(maxlen=HISTORY_LEN)
 IRIS_HISTORY = deque(maxlen=HISTORY_LEN)
@@ -222,6 +224,20 @@ while True:
         iris_ar = (left_iris_ar + right_iris_ar) / 2
         x_angle, y_angle, z_angle = head_pose(landmarks, w, h)
 
+        # Gaze estimation: compute normalized iris center offset within each eye
+        left_iris_x = np.mean([landmarks[i].x for i in LEFT_IRIS])
+        right_iris_x = np.mean([landmarks[i].x for i in RIGHT_IRIS])
+        left_eye_x_center = np.mean([landmarks[i].x for i in LEFT_EYE])
+        right_eye_x_center = np.mean([landmarks[i].x for i in RIGHT_EYE])
+        left_eye_w = max([landmarks[i].x for i in LEFT_EYE]) - min([landmarks[i].x for i in LEFT_EYE])
+        right_eye_w = max([landmarks[i].x for i in RIGHT_EYE]) - min([landmarks[i].x for i in RIGHT_EYE])
+        # protect against tiny widths
+        if left_eye_w < 1e-6: left_eye_w = 1e-6
+        if right_eye_w < 1e-6: right_eye_w = 1e-6
+        left_offset = (left_iris_x - left_eye_x_center) / left_eye_w
+        right_offset = (right_iris_x - right_eye_x_center) / right_eye_w
+        gaze_x = (left_offset + right_offset) / 2.0
+
         # EMA smoothing (more robust than simple mean)
         if ear_ema is None:
             ear_ema = ear
@@ -269,16 +285,25 @@ while True:
         else:
             eye_state = "Open"
 
-        # Adjust yaw by neutral yaw (if calibrated)
-        adjusted_yaw = pose_smooth[1] - (neutral_yaw if neutral_yaw is not None else 0.0)
-
-        # Head direction (ignore if face turned too far)
-        if abs(adjusted_yaw) > YAW_FACE_AWAY:
-            direction = "Face turned away"
-        elif abs(adjusted_yaw) > YAW_DISTRACT:
-            direction = "Looking Left" if adjusted_yaw > 0 else "Looking Right"
+        # Determine direction primarily by gaze; fallback to adjusted yaw if gaze unstable
+        direction = "Looking Center"
+        # If iris offsets are meaningful, use gaze_x
+        if not np.isnan(gaze_x):
+            if gaze_x > GAZE_THRESH:
+                direction = "Looking Right"
+            elif gaze_x < -GAZE_THRESH:
+                direction = "Looking Left"
+            else:
+                direction = "Looking Center"
         else:
-            direction = "Looking Center"
+            # fallback to pose if gaze not available
+            adjusted_yaw = pose_smooth[1] - (neutral_yaw if neutral_yaw is not None else 0.0)
+            if abs(adjusted_yaw) > YAW_FACE_AWAY:
+                direction = "Face turned away"
+            elif abs(adjusted_yaw) > YAW_DISTRACT:
+                direction = "Looking Left" if adjusted_yaw > 0 else "Looking Right"
+            else:
+                direction = "Looking Center"
 
         # Focus logic with confidence
         confidence = 1.0
@@ -306,11 +331,12 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
         cv2.putText(disp, f"Confidence: {confidence:.2f}", (30, 190),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
-        # Debug overlay: raw yaw, adjusted yaw, ear, iris, normalized face width and yaw-away threshold
-        cv2.putText(disp, f"Yaw:{pose_smooth[1]:.1f} Adj:{adjusted_yaw:.1f} EAR:{ear_smooth:.2f} IAR:{iris_smooth:.2f} faceW:{face_w_norm:.2f} yawAway:{YAW_FACE_AWAY}", (30,230),
+        # Debug overlay: raw yaw, gaze_x, ear, iris, normalized face width and yaw-away threshold
+        adj_yaw_display = (pose_smooth[1] - (neutral_yaw if neutral_yaw is not None else 0.0))
+        cv2.putText(disp, f"Yaw:{pose_smooth[1]:.1f} Adj:{adj_yaw_display:.1f} GazeX:{gaze_x:.2f} EAR:{ear_smooth:.2f} IAR:{iris_smooth:.2f} faceW:{face_w_norm:.2f}", (30,230),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,50), 2)
         if args.verbose:
-            print(f"ts={ts:.3f} raw_yaw={pose_smooth[1]:.2f} adj_yaw={adjusted_yaw:.2f} ear={ear_smooth:.3f} iar={iris_smooth:.3f} faceW={face_w_norm:.3f} status={focus_status} conf={confidence:.2f}")
+            print(f"ts={ts:.3f} raw_yaw={pose_smooth[1]:.2f} gaze_x={gaze_x:.3f} ear={ear_smooth:.3f} iar={iris_smooth:.3f} faceW={face_w_norm:.3f} status={focus_status} conf={confidence:.2f}")
         log_status(ts, ear_smooth, iris_smooth, pose_smooth, focus_status, confidence)
     else:
         cv2.putText(frame, "No face detected", (30, 30),
