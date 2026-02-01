@@ -1,5 +1,6 @@
 # AI Focus Detector
 ![Demo animation](assets/animation.svg)
+
 **This repository contains three entrypoints for a webcam-based focus / drowsiness detector that uses MediaPipe landmarks.**
 
 ## Files
