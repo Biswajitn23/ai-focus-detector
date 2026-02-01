@@ -51,6 +51,9 @@ def eye_aspect_ratio(landmarks, eye_indices):
     vertical1 = np.linalg.norm(np.array(points[1]) - np.array(points[5]))
     vertical2 = np.linalg.norm(np.array(points[2]) - np.array(points[4]))
     horizontal = np.linalg.norm(np.array(points[0]) - np.array(points[3]))
+    # protect against degenerate horizontal distance
+    if horizontal <= 1e-6:
+        return 0.0
     ear = (vertical1 + vertical2) / (2.0 * horizontal)
     return ear
 
@@ -60,7 +63,7 @@ def iris_aspect_ratio(landmarks, iris_indices):
     ys = [landmarks[i].y for i in iris_indices]
     width = max(xs) - min(xs)
     height = max(ys) - min(ys)
-    return height / width if width > 0 else 0
+    return height / width if width > 1e-6 else 0
 
 
 # Head pose estimation using solvePnP
@@ -88,10 +91,13 @@ def head_pose(landmarks, w, h):
          [0, focal_length, center[1]],
          [0, 0, 1]], dtype='double')
     dist_coeffs = np.zeros((4, 1))
-    success, rotation_vector, translation_vector = cv2.solvePnP(
-        model_points, image_points, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE)
+    try:
+        success, rotation_vector, translation_vector = cv2.solvePnP(
+            model_points, image_points, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE)
+    except Exception:
+        return 0.0, 0.0, 0.0
     if not success:
-        return 0, 0, 0
+        return 0.0, 0.0, 0.0
     # Convert rotation vector to Euler angles
     rmat, _ = cv2.Rodrigues(rotation_vector)
     sy = np.sqrt(rmat[0, 0] ** 2 + rmat[1, 0] ** 2)
@@ -114,24 +120,41 @@ else:
     face_mesh = mps_face_mesh.FaceMesh(static_image_mode=False, refine_landmarks=True, max_num_faces=1)
 
 
-# --- Advanced Focus Detection ---
+# --- Advanced Focus Detection (improvements) ---
 from collections import deque
 import time
 
-EAR_HISTORY = deque(maxlen=10)
-IRIS_HISTORY = deque(maxlen=10)
-POSE_HISTORY = deque(maxlen=10)
+# Tunable params
+HISTORY_LEN = 30
+EMA_ALPHA = 0.35
+MIN_FACE_SCALE = 0.12
+
+EAR_HISTORY = deque(maxlen=HISTORY_LEN)
+IRIS_HISTORY = deque(maxlen=HISTORY_LEN)
+POSE_HISTORY = deque(maxlen=HISTORY_LEN)
 LOG_FILE = "focus_log.csv"
 
 # Calibration
 CALIBRATION_MODE = False
-CALIBRATION_FRAMES = 100
+CALIBRATION_FRAMES = 120
 calib_ear = []
 calib_iris = []
+
+# EMA state
+ear_ema = None
+iris_ema = None
+pose_ema = None
 
 def log_status(ts, ear, iris, pose, focus_status, confidence):
     with open(LOG_FILE, "a") as f:
         f.write(f"{ts},{ear:.3f},{iris:.3f},{pose[0]:.1f},{pose[1]:.1f},{pose[2]:.1f},{focus_status},{confidence:.2f}\n")
+
+def face_scale_from_landmarks(landmarks):
+    xs = [lm.x for lm in landmarks]
+    ys = [lm.y for lm in landmarks]
+    width = max(xs) - min(xs)
+    height = max(ys) - min(ys)
+    return width, height
 
 print("Press 'c' to calibrate, 'q' to quit.")
 cap = cv2.VideoCapture(0)
@@ -157,6 +180,15 @@ while True:
             landmarks = results.multi_face_landmarks[0].landmark
     ts = time.time()
     if landmarks is not None:
+        # ignore tiny faces (too far / unreliable)
+        face_w_norm, face_h_norm = face_scale_from_landmarks(landmarks)
+        if face_w_norm < MIN_FACE_SCALE and face_h_norm < MIN_FACE_SCALE:
+            cv2.putText(frame, "Face too small", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+            cv2.imshow("Focus Level Detector", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+            continue
+
         left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
         right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
         ear = (left_ear + right_ear) / 2
@@ -164,18 +196,30 @@ while True:
         right_iris_ar = iris_aspect_ratio(landmarks, RIGHT_IRIS)
         iris_ar = (left_iris_ar + right_iris_ar) / 2
         x_angle, y_angle, z_angle = head_pose(landmarks, w, h)
+
+        # EMA smoothing (more robust than simple mean)
+        if ear_ema is None:
+            ear_ema = ear
+            iris_ema = iris_ar
+            pose_ema = np.array([x_angle, y_angle, z_angle])
+        else:
+            ear_ema = EMA_ALPHA * ear + (1 - EMA_ALPHA) * ear_ema
+            iris_ema = EMA_ALPHA * iris_ar + (1 - EMA_ALPHA) * iris_ema
+            pose_ema = EMA_ALPHA * np.array([x_angle, y_angle, z_angle]) + (1 - EMA_ALPHA) * pose_ema
+
         EAR_HISTORY.append(ear)
         IRIS_HISTORY.append(iris_ar)
         POSE_HISTORY.append((x_angle, y_angle, z_angle))
-        # Calibration
+
+        # Calibration: use low-percentile threshold for robustness
         if CALIBRATION_MODE:
             calib_ear.append(ear)
             calib_iris.append(iris_ar)
             cv2.putText(frame, f"Calibrating... {len(calib_ear)}/{CALIBRATION_FRAMES}", (30, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
             if len(calib_ear) >= CALIBRATION_FRAMES:
-                ear_thresh = np.mean(calib_ear) * 0.8
-                iris_thresh = np.mean(calib_iris) * 0.8
+                ear_thresh = max(0.04, np.percentile(calib_ear, 10) * 0.95)
+                iris_thresh = max(0.05, np.percentile(calib_iris, 10) * 0.95)
                 CALIBRATION_MODE = False
                 calib_ear.clear()
                 calib_iris.clear()
@@ -184,30 +228,39 @@ while True:
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
             continue
-        # Smoothing
-        ear_smooth = np.mean(EAR_HISTORY)
-        iris_smooth = np.mean(IRIS_HISTORY)
-        pose_smooth = np.mean(POSE_HISTORY, axis=0)
+
+        ear_smooth = ear_ema
+        iris_smooth = iris_ema
+        pose_smooth = pose_ema if pose_ema is not None else np.array([0.0, 0.0, 0.0])
+
         # Eye state
         if ear_smooth < ear_thresh and iris_smooth < iris_thresh:
             eye_state = "Closed"
         else:
             eye_state = "Open"
-        # Head direction
-        if abs(pose_smooth[1]) > 20:
+
+        # Head direction (ignore if face turned too far)
+        if abs(pose_smooth[1]) > 35:
+            direction = "Face turned away"
+        elif abs(pose_smooth[1]) > 20:
             direction = "Looking Left" if pose_smooth[1] > 0 else "Looking Right"
         else:
             direction = "Looking Center"
+
         # Focus logic with confidence
         confidence = 1.0
         if eye_state == "Closed":
             focus_status = "Not Focused (Sleepy)"
+            confidence -= 0.5
+        elif direction == "Face turned away":
+            focus_status = "Not Focused (Not visible)"
             confidence -= 0.5
         elif direction != "Looking Center":
             focus_status = "Not Focused (Distracted)"
             confidence -= 0.3
         else:
             focus_status = "Focused"
+
         # Display
         cv2.putText(frame, f"EAR: {ear_smooth:.2f}", (30, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
@@ -231,6 +284,9 @@ while True:
         CALIBRATION_MODE = True
         calib_ear.clear()
         calib_iris.clear()
+        ear_ema = None
+        iris_ema = None
+        pose_ema = None
         print("Calibration started. Please look at the camera with eyes open.")
 cap.release()
 cv2.destroyAllWindows()
