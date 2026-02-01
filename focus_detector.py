@@ -1,6 +1,8 @@
+import argparse
 import cv2
 import numpy as np
 import os
+import time
 import urllib.request
 import mediapipe as mp
 
@@ -127,7 +129,27 @@ import time
 # Tunable params
 HISTORY_LEN = 30
 EMA_ALPHA = 0.35
-MIN_FACE_SCALE = 0.12
+MIN_FACE_SCALE = 0.08
+
+# Default yaw thresholds (degrees)
+YAW_FACE_AWAY = 45
+YAW_DISTRACT = 20
+
+# Parse command-line args
+parser = argparse.ArgumentParser(description="Focus detector options")
+parser.add_argument("--min-face-scale", type=float, default=MIN_FACE_SCALE, help="Minimum normalized face width/height to accept")
+parser.add_argument("--yaw-away", type=float, default=YAW_FACE_AWAY, help="Yaw deg considered 'face turned away'")
+parser.add_argument("--yaw-distract", type=float, default=YAW_DISTRACT, help="Yaw deg considered 'distracted'")
+parser.add_argument("--calib-frames", type=int, default=120, help="Calibration frames")
+parser.add_argument("--test-seconds", type=int, default=0, help="Run for this many seconds then exit (0 = run until quit)")
+parser.add_argument("--verbose", action="store_true", help="Verbose console logging each frame")
+args = parser.parse_args()
+
+# apply args
+MIN_FACE_SCALE = args.min_face_scale
+YAW_FACE_AWAY = args.yaw_away
+YAW_DISTRACT = args.yaw_distract
+CALIBRATION_FRAMES = args.calib_frames
 
 EAR_HISTORY = deque(maxlen=HISTORY_LEN)
 IRIS_HISTORY = deque(maxlen=HISTORY_LEN)
@@ -136,7 +158,6 @@ LOG_FILE = "focus_log.csv"
 
 # Calibration
 CALIBRATION_MODE = False
-CALIBRATION_FRAMES = 120
 calib_ear = []
 calib_iris = []
 
@@ -158,6 +179,7 @@ def face_scale_from_landmarks(landmarks):
 
 print("Press 'c' to calibrate, 'q' to quit.")
 cap = cv2.VideoCapture(0)
+start_time = time.time()
 frame_count = 0
 ear_thresh = 0.20
 iris_thresh = 0.25
@@ -242,9 +264,9 @@ while True:
             eye_state = "Open"
 
         # Head direction (ignore if face turned too far)
-        if abs(pose_smooth[1]) > 35:
+        if abs(pose_smooth[1]) > YAW_FACE_AWAY:
             direction = "Face turned away"
-        elif abs(pose_smooth[1]) > 20:
+        elif abs(pose_smooth[1]) > YAW_DISTRACT:
             direction = "Looking Left" if pose_smooth[1] > 0 else "Looking Right"
         else:
             direction = "Looking Center"
@@ -274,6 +296,11 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
         cv2.putText(frame, f"Confidence: {confidence:.2f}", (30, 190),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+        # Debug overlay: yaw, ear, iris, normalized face width and yaw-away threshold
+        cv2.putText(frame, f"Yaw:{pose_smooth[1]:.1f} EAR:{ear_smooth:.2f} IAR:{iris_smooth:.2f} faceW:{face_w_norm:.2f} yawAway:{YAW_FACE_AWAY}", (30,230),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,50), 2)
+        if args.verbose:
+            print(f"ts={ts:.3f} yaw={pose_smooth[1]:.2f} ear={ear_smooth:.3f} iar={iris_smooth:.3f} faceW={face_w_norm:.3f} status={focus_status} conf={confidence:.2f}")
         log_status(ts, ear_smooth, iris_smooth, pose_smooth, focus_status, confidence)
     else:
         cv2.putText(frame, "No face detected", (30, 30),
@@ -291,5 +318,9 @@ while True:
         iris_ema = None
         pose_ema = None
         print("Calibration started. Please look at the camera with eyes open.")
+    # timed test mode: exit after configured seconds
+    if args.test_seconds and (time.time() - start_time) > args.test_seconds:
+        print(f"Test time {args.test_seconds}s reached, exiting")
+        break
 cap.release()
 cv2.destroyAllWindows()
