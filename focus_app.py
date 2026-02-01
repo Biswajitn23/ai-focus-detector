@@ -158,8 +158,10 @@ while run:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     brightness = np.mean(gray)
     if brightness < 40:
-        cv2.putText(frame, "Low light: accuracy reduced", (30, 230),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+        # Put low-light warning on the displayed (mirrored) frame so text remains readable
+        low_light = True
+    else:
+        low_light = False
     if landmarks is not None:
         left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
         right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
@@ -186,6 +188,8 @@ while run:
                 calib_iris.clear()
                 st.success(f"Calibrated: EAR < {st.session_state['ear_thresh']:.2f}, IRIS < {st.session_state['iris_thresh']:.2f}")
             display_frame = cv2.flip(frame, 1)
+            cv2.putText(display_frame, f"Calibrating... {len(calib_ear)}/{CALIBRATION_FRAMES}", (30, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
             frame_window.image(display_frame, channels="BGR")
             continue
         ear_smooth = np.mean(EAR_HISTORY)
@@ -217,20 +221,25 @@ while run:
             confidence -= 0.3
         else:
             focus_status = "Focused"
-        cv2.putText(frame, f"EAR: {ear_smooth:.2f}", (30, 30),
+        # Draw readable overlays on mirrored frame
+        display_frame = cv2.flip(frame, 1)
+        if low_light:
+            cv2.putText(display_frame, "Low light: accuracy reduced", (30, 230),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+        cv2.putText(display_frame, f"EAR: {ear_smooth:.2f}", (30, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-        cv2.putText(frame, f"IAR: {iris_smooth:.2f}", (30, 70),
+        cv2.putText(display_frame, f"IAR: {iris_smooth:.2f}", (30, 70),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,128,255), 2)
-        cv2.putText(frame, f"Pose Yaw: {pose_smooth[1]:.1f}", (30, 110),
+        cv2.putText(display_frame, f"Pose Yaw: {pose_smooth[1]:.1f}", (30, 110),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,0), 2)
-        cv2.putText(frame, f"Status: {focus_status}", (30, 150),
+        cv2.putText(display_frame, f"Status: {focus_status}", (30, 150),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
-        cv2.putText(frame, f"Confidence: {confidence:.2f}", (30, 190),
+        cv2.putText(display_frame, f"Confidence: {confidence:.2f}", (30, 190),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
     else:
-        cv2.putText(frame, "No face detected", (30, 30),
+        display_frame = cv2.flip(frame, 1)
+        cv2.putText(display_frame, "No face detected", (30, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-    display_frame = cv2.flip(frame, 1)
     frame_window.image(display_frame, channels="BGR")
     if not run:
         break

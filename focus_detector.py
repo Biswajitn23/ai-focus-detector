@@ -238,8 +238,6 @@ while True:
         if CALIBRATION_MODE:
             calib_ear.append(ear)
             calib_iris.append(iris_ar)
-            cv2.putText(frame, f"Calibrating... {len(calib_ear)}/{CALIBRATION_FRAMES}", (30, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
             if len(calib_ear) >= CALIBRATION_FRAMES:
                 ear_thresh = max(0.04, np.percentile(calib_ear, 10) * 0.95)
                 iris_thresh = max(0.05, np.percentile(calib_iris, 10) * 0.95)
@@ -248,6 +246,8 @@ while True:
                 calib_iris.clear()
                 print(f"Calibrated: EAR < {ear_thresh:.2f}, IRIS < {iris_thresh:.2f}")
             disp = cv2.flip(frame, 1)
+            cv2.putText(disp, f"Calibrating... {len(calib_ear)}/{CALIBRATION_FRAMES}", (30, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
             cv2.imshow("Focus Level Detector", disp)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
@@ -285,19 +285,20 @@ while True:
         else:
             focus_status = "Focused"
 
-        # Display
-        cv2.putText(frame, f"EAR: {ear_smooth:.2f}", (30, 30),
+        # Prepare display text and then render on flipped image so text is not mirrored
+        disp = cv2.flip(frame, 1)
+        cv2.putText(disp, f"EAR: {ear_smooth:.2f}", (30, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-        cv2.putText(frame, f"IAR: {iris_smooth:.2f}", (30, 70),
+        cv2.putText(disp, f"IAR: {iris_smooth:.2f}", (30, 70),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,128,255), 2)
-        cv2.putText(frame, f"Pose Yaw: {pose_smooth[1]:.1f}", (30, 110),
+        cv2.putText(disp, f"Pose Yaw: {pose_smooth[1]:.1f}", (30, 110),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,0), 2)
-        cv2.putText(frame, f"Status: {focus_status}", (30, 150),
+        cv2.putText(disp, f"Status: {focus_status}", (30, 150),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
-        cv2.putText(frame, f"Confidence: {confidence:.2f}", (30, 190),
+        cv2.putText(disp, f"Confidence: {confidence:.2f}", (30, 190),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
         # Debug overlay: yaw, ear, iris, normalized face width and yaw-away threshold
-        cv2.putText(frame, f"Yaw:{pose_smooth[1]:.1f} EAR:{ear_smooth:.2f} IAR:{iris_smooth:.2f} faceW:{face_w_norm:.2f} yawAway:{YAW_FACE_AWAY}", (30,230),
+        cv2.putText(disp, f"Yaw:{pose_smooth[1]:.1f} EAR:{ear_smooth:.2f} IAR:{iris_smooth:.2f} faceW:{face_w_norm:.2f} yawAway:{YAW_FACE_AWAY}", (30,230),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,50), 2)
         if args.verbose:
             print(f"ts={ts:.3f} yaw={pose_smooth[1]:.2f} ear={ear_smooth:.3f} iar={iris_smooth:.3f} faceW={face_w_norm:.3f} status={focus_status} conf={confidence:.2f}")
@@ -305,7 +306,12 @@ while True:
     else:
         cv2.putText(frame, "No face detected", (30, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-    disp = cv2.flip(frame, 1)
+    # If we didn't already create a display image (non-landmarks branch), create and draw non-face text
+    if 'disp' not in locals():
+        disp = cv2.flip(frame, 1)
+        if landmarks is None:
+            cv2.putText(disp, "No face detected", (30, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
     cv2.imshow("Focus Level Detector", disp)
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
