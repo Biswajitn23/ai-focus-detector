@@ -160,11 +160,13 @@ LOG_FILE = "focus_log.csv"
 CALIBRATION_MODE = False
 calib_ear = []
 calib_iris = []
+calib_yaw = []
 
 # EMA state
 ear_ema = None
 iris_ema = None
 pose_ema = None
+neutral_yaw = None
 
 def log_status(ts, ear, iris, pose, focus_status, confidence):
     with open(LOG_FILE, "a") as f:
@@ -238,12 +240,16 @@ while True:
         if CALIBRATION_MODE:
             calib_ear.append(ear)
             calib_iris.append(iris_ar)
+            calib_yaw.append(y_angle)
             if len(calib_ear) >= CALIBRATION_FRAMES:
                 ear_thresh = max(0.04, np.percentile(calib_ear, 10) * 0.95)
                 iris_thresh = max(0.05, np.percentile(calib_iris, 10) * 0.95)
+                # compute neutral yaw (median) from collected yaw samples
+                neutral_yaw = float(np.median(calib_yaw))
                 CALIBRATION_MODE = False
                 calib_ear.clear()
                 calib_iris.clear()
+                calib_yaw.clear()
                 print(f"Calibrated: EAR < {ear_thresh:.2f}, IRIS < {iris_thresh:.2f}")
             disp = cv2.flip(frame, 1)
             cv2.putText(disp, f"Calibrating... {len(calib_ear)}/{CALIBRATION_FRAMES}", (30, 30),
@@ -263,11 +269,14 @@ while True:
         else:
             eye_state = "Open"
 
+        # Adjust yaw by neutral yaw (if calibrated)
+        adjusted_yaw = pose_smooth[1] - (neutral_yaw if neutral_yaw is not None else 0.0)
+
         # Head direction (ignore if face turned too far)
-        if abs(pose_smooth[1]) > YAW_FACE_AWAY:
+        if abs(adjusted_yaw) > YAW_FACE_AWAY:
             direction = "Face turned away"
-        elif abs(pose_smooth[1]) > YAW_DISTRACT:
-            direction = "Looking Left" if pose_smooth[1] > 0 else "Looking Right"
+        elif abs(adjusted_yaw) > YAW_DISTRACT:
+            direction = "Looking Left" if adjusted_yaw > 0 else "Looking Right"
         else:
             direction = "Looking Center"
 
@@ -297,11 +306,11 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
         cv2.putText(disp, f"Confidence: {confidence:.2f}", (30, 190),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
-        # Debug overlay: yaw, ear, iris, normalized face width and yaw-away threshold
-        cv2.putText(disp, f"Yaw:{pose_smooth[1]:.1f} EAR:{ear_smooth:.2f} IAR:{iris_smooth:.2f} faceW:{face_w_norm:.2f} yawAway:{YAW_FACE_AWAY}", (30,230),
+        # Debug overlay: raw yaw, adjusted yaw, ear, iris, normalized face width and yaw-away threshold
+        cv2.putText(disp, f"Yaw:{pose_smooth[1]:.1f} Adj:{adjusted_yaw:.1f} EAR:{ear_smooth:.2f} IAR:{iris_smooth:.2f} faceW:{face_w_norm:.2f} yawAway:{YAW_FACE_AWAY}", (30,230),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,50), 2)
         if args.verbose:
-            print(f"ts={ts:.3f} yaw={pose_smooth[1]:.2f} ear={ear_smooth:.3f} iar={iris_smooth:.3f} faceW={face_w_norm:.3f} status={focus_status} conf={confidence:.2f}")
+            print(f"ts={ts:.3f} raw_yaw={pose_smooth[1]:.2f} adj_yaw={adjusted_yaw:.2f} ear={ear_smooth:.3f} iar={iris_smooth:.3f} faceW={face_w_norm:.3f} status={focus_status} conf={confidence:.2f}")
         log_status(ts, ear_smooth, iris_smooth, pose_smooth, focus_status, confidence)
     else:
         cv2.putText(frame, "No face detected", (30, 30),
