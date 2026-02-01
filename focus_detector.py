@@ -184,7 +184,8 @@ while True:
         face_w_norm, face_h_norm = face_scale_from_landmarks(landmarks)
         if face_w_norm < MIN_FACE_SCALE and face_h_norm < MIN_FACE_SCALE:
             cv2.putText(frame, "Face too small", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-            cv2.imshow("Focus Level Detector", frame)
+            disp = cv2.flip(frame, 1)
+            cv2.imshow("Focus Level Detector", disp)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
             continue
@@ -224,7 +225,8 @@ while True:
                 calib_ear.clear()
                 calib_iris.clear()
                 print(f"Calibrated: EAR < {ear_thresh:.2f}, IRIS < {iris_thresh:.2f}")
-            cv2.imshow("Focus Level Detector", frame)
+            disp = cv2.flip(frame, 1)
+            cv2.imshow("Focus Level Detector", disp)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
             continue
@@ -276,7 +278,8 @@ while True:
     else:
         cv2.putText(frame, "No face detected", (30, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-    cv2.imshow("Focus Level Detector", frame)
+    disp = cv2.flip(frame, 1)
+    cv2.imshow("Focus Level Detector", disp)
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
         break

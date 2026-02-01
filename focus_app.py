@@ -185,7 +185,8 @@ while run:
                 calib_ear.clear()
                 calib_iris.clear()
                 st.success(f"Calibrated: EAR < {st.session_state['ear_thresh']:.2f}, IRIS < {st.session_state['iris_thresh']:.2f}")
-            frame_window.image(frame, channels="BGR")
+            display_frame = cv2.flip(frame, 1)
+            frame_window.image(display_frame, channels="BGR")
             continue
         ear_smooth = np.mean(EAR_HISTORY)
         iris_smooth = np.mean(IRIS_HISTORY)
@@ -229,7 +230,8 @@ while run:
     else:
         cv2.putText(frame, "No face detected", (30, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-    frame_window.image(frame, channels="BGR")
+    display_frame = cv2.flip(frame, 1)
+    frame_window.image(display_frame, channels="BGR")
     if not run:
         break
 cap.release()
