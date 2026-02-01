@@ -33,13 +33,25 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+### 1b. Download MediaPipe Model (Required)
+The `face_landmarker_v2.task` file is required for face detection:
+- Download from [MediaPipe Face Landmarker](https://developers.google.com/mediapipe/solutions/vision/face_landmarker)
+- Place it in the project root directory
+- The file should be named: `face_landmarker_v2.task`
+
 ### 2. Run the Web App
 ```powershell
 python app.py
 ```
 Open http://127.0.0.1:7861 in your browser
 
-### 3. Train a Custom Model (Optional)
+### 3. Load Pre-trained Model or Train Custom Model
+**Option A: Use Pre-trained Model (Recommended for Quick Start)**
+- A `focus_model.pkl` is included in the repository
+- The app will automatically load it on startup
+- No additional training needed
+
+**Option B: Train a Custom Model**
 Prepare training data in `data/` folder:
 ```
 data/
@@ -97,7 +109,39 @@ features = [
 
 **Key Insight**: Gaze direction (how far the iris is from center) is the strongest predictor of focus. When looking at a camera/screen (focused), `gaze_x ≈ 0`. When looking to the side (not focused), `gaze_x` is large.
 
-## Troubleshooting
+## Dataset Folder Usage
+
+The `dataset/` folder is used for pre-organized training data:
+```
+dataset/
+└── person looking at computer screen/  (category of training samples)
+    ├── image1.jpg
+    ├── image2.jpg
+    └── ...
+```
+
+To use this folder for training:
+1. Organize your images into focused/not_focused subfolders within `dataset/`
+2. Run the training script with the dataset path:
+```powershell
+python train_focus.py --data_dir dataset
+```
+
+**Troubleshooting**
+
+### MediaPipe Model File Errors
+
+#### "FileNotFoundError: face_landmarker_v2.task"
+- The `face_landmarker_v2.task` file is missing
+- **Solution**: Download from [MediaPipe Face Landmarker](https://developers.google.com/mediapipe/solutions/vision/face_landmarker)
+- Place the file in the project root directory (same level as `app.py`)
+
+#### "Failed to initialize face landmarker"
+- The model file is corrupted or incompatible
+- **Solution**: 
+  - Delete the existing `face_landmarker_v2.task`
+  - Download a fresh copy from the official MediaPipe website
+  - Ensure the file is not renamed or moved
 
 ### "side.jpeg uploading showing focused" 
 **Fixed in latest version**: Missing gaze_x feature has been added to model prediction. The model now correctly detects side profiles as "Not Focused" due to high gaze offset.
@@ -115,19 +159,3 @@ features = [
 - Try retraining with more labeled samples (especially "not_focused" images)
 - Current model has class imbalance (25 focused vs 9 not_focused)
 - Use `download_datasets.py` to auto-collect more training data
-
-## Deployment to Hugging Face Spaces
-
-```powershell
-copy requirements.txt requirements.txt
-git add requirements.txt
-git commit -m "Update requirements"
-huggingface-cli login
-gradio deploy
-```
-
-## Next Steps
-- Collect more "not_focused" training samples to improve model balance
-- Fine-tune confidence thresholds for your specific use case
-- Add blink rate and pupil dilation as additional features
-- Implement batch processing for analyzing multiple images at once
